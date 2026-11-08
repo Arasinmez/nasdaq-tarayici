@@ -158,3 +158,19 @@ def test_config_strips_pasted_whitespace(tmp_path, monkeypatch):
     cfg = load_config(tmp_path / "yok.yaml")
     assert cfg["telegram"]["bot_token"] == "123:ABC"
     assert cfg["telegram"]["chat_id"] == "7141865328"
+
+
+def test_yfinance_missing_ticker_is_retried(monkeypatch):
+    import sys, types
+    from tarayici.data import YFinanceSource
+    calls = []
+
+    def download(tickers, threads, **kw):
+        calls.append((list(tickers), threads))
+        frame = _multi("ticker")
+        return frame[[c for c in frame.columns if c[0] in tickers]] if threads is False else frame[["AAA"]]
+
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(download=download))
+    out = YFinanceSource(pause_sec=0).daily(["AAA", "BBB"])
+    assert set(out) == {"AAA", "BBB"}
+    assert calls[1] == (["BBB"], False)

@@ -101,6 +101,14 @@ class YFinanceSource:
                 continue
             got = split_frame(raw, chunk)
             missing = sorted(set(chunk) - set(got))
+            if missing:  # one retry without threads (yfinance's cache can lock under threads)
+                try:
+                    raw2 = yf.download(tickers=missing, group_by="ticker", auto_adjust=True,
+                                       progress=False, threads=False, **kwargs)
+                    got.update(split_frame(raw2, missing))
+                except Exception as e:
+                    log.warning("Tekrar deneme başarısız: %s", e)
+                missing = sorted(set(chunk) - set(got))
             if missing:
                 log.info("Veri gelmeyen hisseler: %s", ", ".join(missing))
             out.update(got)
