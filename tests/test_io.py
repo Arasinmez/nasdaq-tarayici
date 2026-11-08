@@ -136,3 +136,11 @@ def test_config_env_override(tmp_path, monkeypatch):
     assert cfg["izleme_listesi"] == ["AAPL", "MSFT"]
     assert cfg["telegram"]["bot_token"] == "ortamdan"
     assert cfg["risk"]["hedef_r"] == 2.0  # default filled in
+
+
+def test_config_strips_pasted_whitespace(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC\n")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", " 7141865328\r\n")
+    cfg = load_config(tmp_path / "yok.yaml")
+    assert cfg["telegram"]["bot_token"] == "123:ABC"
+    assert cfg["telegram"]["chat_id"] == "7141865328"

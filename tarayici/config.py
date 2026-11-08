@@ -51,8 +51,9 @@ def load_config(path: str | Path = "config.yaml") -> dict:
     cfg = _merge(DEFAULTS, user)
     # Secrets are better kept in environment variables than in the file.
     tg = cfg["telegram"]
-    tg["bot_token"] = os.environ.get("TELEGRAM_BOT_TOKEN") or str(tg.get("bot_token") or "")
-    tg["chat_id"] = os.environ.get("TELEGRAM_CHAT_ID") or str(tg.get("chat_id") or "")
+    # strip(): pasted secrets often carry a trailing newline or spaces
+    tg["bot_token"] = (os.environ.get("TELEGRAM_BOT_TOKEN") or str(tg.get("bot_token") or "")).strip()
+    tg["chat_id"] = (os.environ.get("TELEGRAM_CHAT_ID") or str(tg.get("chat_id") or "")).strip()
     cfg["izleme_listesi"] = list(dict.fromkeys(
         str(t).strip().upper() for t in cfg["izleme_listesi"] if str(t).strip()
     ))
