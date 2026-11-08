@@ -1,0 +1,70 @@
+name: Nasdaq tarayici
+
+on:
+  schedule:
+    # Saatler UTC. Bu aralık ABD seansını hem yaz hem kış saatinde kapsar
+    # (hafta içi, Türkiye saatiyle 16:00–00:55). Kapanış sonrası günlük tarama da bu aralıkta.
+    # Repo GİZLİ (private) ise ücretsiz kotayı aşmamak için */5 yerine */10 yaz.
+    - cron: "*/5 13-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      islem:
+        description: "Ne yapılsın?"
+        type: choice
+        options:
+          - telegram-test
+          - simdi-tara
+          - geriye-test
+          - tara
+        default: telegram-test
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tarayici
+  cancel-in-progress: false
+
+jobs:
+  tara:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Paketleri kur
+        run: pip install -r requirements.txt
+
+      - name: Botu calistir
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ISLEM: ${{ github.event.inputs.islem || 'tara' }}
+        run: |
+          case "$ISLEM" in
+            telegram-test) python calistir.py --telegram-test ;;
+            simdi-tara)    python calistir.py --simdi ;;
+            geriye-test)   python geriye_test.py ;;
+            *)             python calistir.py --tek-sefer ;;
+          esac
+
+      - name: Durumu kaydet
+        if: always()
+        run: |
+          git config user.name "tarayici-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for f in veri/durum.json veri/sinyaller.csv veri/sonuclar.csv; do
+            if [ -f "$f" ]; then git add -f "$f"; fi
+          done
+          if git diff --cached --quiet; then
+            echo "Kaydedilecek degisiklik yok"
+          else
+            git commit -m "Durum guncellendi [skip ci]"
+            git pull --rebase --autostash || true
+            git push || echo "Kayit gonderilemedi; bir sonraki turda tekrar denenecek"
+          fi

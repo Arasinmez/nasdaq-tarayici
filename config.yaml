@@ -1,0 +1,91 @@
+# ------------------------------------------------------------------
+# Nasdaq Tarayıcı ayarları
+# Bu dosyayı Not Defteri / VS Code ile açıp düzenleyebilirsin.
+# ------------------------------------------------------------------
+
+# Taranacak hisseler (Nasdaq'ta işlem gören semboller). İstediğini ekle/çıkar.
+izleme_listesi:
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+  - AVGO
+  - COST
+  - NFLX
+  - AMD
+  - PLTR
+  - ADBE
+  - PEP
+  - CSCO
+  - INTC
+  - QCOM
+  - TXN
+  - AMAT
+  - MU
+  - LRCX
+  - KLAC
+  - ADI
+  - INTU
+  - ISRG
+  - BKNG
+  - PANW
+  - CRWD
+  - MRVL
+  - ASML
+  - ARM
+  - SMCI
+  - COIN
+  - ABNB
+  - DDOG
+  - AMGN
+  - GILD
+  - SBUX
+  - PYPL
+  - TMUS
+
+# Mesajlardaki saatler için
+yerel_saat_dilimi: Europe/Istanbul
+
+# Günlük kayıtlar, sinyal geçmişi ve durum dosyası bu klasöre yazılır
+veri_klasoru: veri
+
+telegram:
+  aktif: true
+  # Güvenlik için token ve chat id'yi buraya yazmak yerine ortam değişkeni
+  # olarak ver: TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID (README'ye bak).
+  # Yine de buraya yazmak istersen tırnak içinde yaz ve dosyayı kimseyle paylaşma.
+  bot_token: ""
+  chat_id: ""
+
+zamanlama:
+  gun_ici_aralik_dakika: 5        # piyasa açıkken kaç dakikada bir taransın
+  bar_dakika: 5                   # gün içi mum uzunluğu (dakika)
+  mum_kapanis_gecikmesi_sn: 20    # mum kapandıktan kaç saniye sonra veri çekilsin
+  gunluk_tarama_gecikme_dk: 15    # kapanıştan kaç dakika sonra günlük tarama yapılsın
+  acilis_bildirimi: true          # piyasa açılınca "bot çalışıyor" mesajı
+
+stratejiler:
+  kirilim:                        # 20 günlük zirvenin yüksek hacimle kırılması
+    aktif: true
+    zirve_gun: 20
+    hacim_kati: 1.5               # hacim, 20 günlük ortalamanın en az bu katı
+  trend_geri_cekilme:             # yükselen trendde RSI dipten dönerken
+    aktif: true
+    rsi_esik: 40
+  acilis_araligi_kirilimi:        # gün içi: ilk 15 dakikanın tepesinin kırılması
+    aktif: true
+    aralik_dakika: 15
+    hacim_kati: 1.5
+    son_saat_et: "11:30"          # New York saatiyle bundan sonra sinyal verme
+    taze_dakika: 15               # kırılım bundan daha eskiyse geç kalmış say, mesaj atma
+
+risk:
+  atr_carpani: 2.0                # günlük stop = fiyat − 2 × ATR(14)
+  hedef_r: 2.0                    # hedef = riskin 2 katı (2R)
+
+takip:
+  tekrar_bekleme_saat: 20         # aynı hisse + strateji için en erken tekrar uyarı
+  gunluk_sinyal_max_gun: 20       # günlük sinyaller en fazla kaç işlem günü takip edilsin

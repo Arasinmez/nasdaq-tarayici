@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+veri/bot.log*
+veri/*.tmp
+veri/geriye_test_islemler.csv
+.env
