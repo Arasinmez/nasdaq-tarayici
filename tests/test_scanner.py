@@ -69,13 +69,14 @@ def test_target_hit_is_tracked(cfg, tmp_path):
     s.state.set_flag("open_notified", "2026-11-10")
     s.tick(et(2026, 11, 10, 10, 0, 20))
     assert s.state.n_open == 1
-    # next bar runs through the target (101.6 + 2*1.1 = 103.8)
+    # next bar runs through TP1 (102.7) and TP2 (101.6 + 2*1.1 = 103.8)
     src.intraday_data["TEST"] = intraday_day(bars=bars + [(101.7, 104.2, 101.5, 104.0, 90_000)])
     s.tick(et(2026, 11, 10, 10, 5, 20))
     assert s.state.n_open == 0
-    assert any("HEDEFE ULAŞTI" in m for m in n.messages)
+    text = "\n".join(n.messages)
+    assert "TP1 GELDİ" in text and "TP2 GELDİ" in text
     stats = s.journal.stats()
-    assert stats["n"] == 1 and abs(stats["avg_r"] - 2.0) < 1e-6
+    assert stats["n"] == 1 and abs(stats["avg_r"] - 1.5) < 1e-6  # half at 1R, half at 2R
 
 
 def test_stop_wins_when_bar_hits_both(cfg, tmp_path):
@@ -111,6 +112,12 @@ def test_sleep_seconds(cfg, tmp_path):
     assert s.sleep_seconds(et(2026, 11, 16, 9, 29, 0)) == 80    # Monday: open + 20 s
 
 
+def test_sleep_seconds_ten_minutes(cfg, tmp_path):
+    cfg["zamanlama"]["gun_ici_aralik_dakika"] = 10
+    s, _ = make(cfg, tmp_path, FakeSource())
+    assert s.sleep_seconds(et(2026, 11, 10, 10, 3, 0)) == 440    # next run 10:10:20
+
+
 def test_daily_target(cfg, tmp_path):
     s, _ = make(cfg, tmp_path, FakeSource())
     assert str(s.daily_target(et(2026, 11, 10, 10, 0))) == "2026-11-09"
@@ -141,7 +148,7 @@ def test_no_data_schedules_retry(cfg, tmp_path):
 
 def test_separate_runs_do_not_duplicate(cfg, tmp_path):
     src = FakeSource(intraday={"TEST": intraday_day(bars=orb_bars())})
-    for minute in (0, 5, 10):
+    for minute in (0, 10, 20):
         s, n = make(cfg, tmp_path, src)
         s.state.set_flag("daily_done", "2026-11-09")
         s.tick(et(2026, 11, 10, 10, minute, 20))
@@ -164,5 +171,74 @@ def test_too_late_run_does_not_alert(cfg, tmp_path):
     src = FakeSource(intraday={"TEST": intraday_day(bars=orb_bars())})
     s, n = make(cfg, tmp_path, src)
     s.state.set_flag("daily_done", "2026-11-09")
-    s.tick(et(2026, 11, 10, 10, 20, 0))
+    s.tick(et(2026, 11, 10, 10, 25, 0))
     assert not any("GİRİŞ SİNYALİ" in m for m in n.messages)
+
+
+def test_tp1_then_breakeven(cfg, tmp_path):
+    bars = orb_bars()
+    src = FakeSource(intraday={"TEST": intraday_day(bars=bars)})
+    s, n = make(cfg, tmp_path, src)
+    s.state.set_flag("daily_done", "2026-11-09")
+    s.tick(et(2026, 11, 10, 10, 0, 20))
+    bars = bars + [(101.7, 102.9, 101.7, 102.8, 60_000)]           # TP1 102.7 only
+    src.intraday_data["TEST"] = intraday_day(bars=bars)
+    s.tick(et(2026, 11, 10, 10, 5, 20))
+    rec = next(iter(s.state.data["open"].values()))
+    assert rec["tp1_hit"] and any("TP1 GELDİ" in m for m in n.messages)
+    # the TP1 bar must not be re-processed on the next scan
+    before = len(n.messages)
+    bars = bars + [(102.8, 103.0, 102.0, 102.2, 30_000)]           # nothing hit
+    src.intraday_data["TEST"] = intraday_day(bars=bars)
+    s.tick(et(2026, 11, 10, 10, 10, 20))
+    assert len(n.messages) == before
+    bars = bars + [(102.2, 102.3, 101.4, 101.5, 30_000)]           # back to entry 101.6
+    src.intraday_data["TEST"] = intraday_day(bars=bars)
+    s.tick(et(2026, 11, 10, 10, 15, 20))
+    assert s.state.n_open == 0
+    assert any("BAŞA BAŞ" in m for m in n.messages)
+    assert abs(s.journal.stats()["avg_r"] - 0.5) < 1e-6           # half at +1R, half at 0
+
+
+def test_market_filter_blocks_and_reports(cfg, tmp_path):
+    from conftest import qqq
+    cfg["filtreler"]["piyasa"]["aktif"] = True
+    src = FakeSource(daily={"TEST": breakout_daily(), "QQQ": qqq(500, 300)},
+                     intraday={"TEST": intraday_day(bars=orb_bars())})
+    s, n = make(cfg, tmp_path, src)
+    s.tick(et(2026, 11, 10, 10, 0, 20))
+    text = "\n".join(n.messages)
+    assert "GİRİŞ SİNYALİ" not in text           # neither daily nor intraday
+    assert "200 günlük ortalamanın altında" in text
+    assert s.state.flag("piyasa_ok") is False
+
+
+def test_market_filter_allows_in_uptrend(cfg, tmp_path):
+    from conftest import qqq
+    cfg["filtreler"]["piyasa"]["aktif"] = True
+    cfg["filtreler"]["goreceli_guc"]["aktif"] = True
+    src = FakeSource(daily={"TEST": breakout_daily(), "QQQ": qqq(300, 500)})
+    s, n = make(cfg, tmp_path, src)
+    now = et(2026, 11, 10, 8, 0)
+    sent = s.scan_daily(now, s.daily_target(now))
+    assert [x.strategy for x in sent] == ["kirilim"]
+    assert any("endeksten güçlü" in m for m in n.messages)
+    assert s.state.flag("piyasa_ok") is True
+
+
+def test_relative_strength_filter_blocks_laggards(cfg, tmp_path):
+    from conftest import qqq
+    cfg["filtreler"]["goreceli_guc"]["aktif"] = True
+    src = FakeSource(daily={"TEST": breakout_daily(), "QQQ": qqq(100, 500)})  # index ran faster
+    s, _ = make(cfg, tmp_path, src)
+    now = et(2026, 11, 10, 8, 0)
+    assert s.scan_daily(now, s.daily_target(now)) == []
+
+
+def test_filters_fail_closed_without_index(cfg, tmp_path):
+    cfg["filtreler"]["piyasa"]["aktif"] = True
+    src = FakeSource(daily={"TEST": breakout_daily()})
+    s, n = make(cfg, tmp_path, src)
+    now = et(2026, 11, 10, 8, 0)
+    assert s.scan_daily(now, s.daily_target(now)) == []
+    assert any("endeks verisi alınamadı" in m for m in n.messages)

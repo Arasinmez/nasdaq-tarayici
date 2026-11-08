@@ -134,9 +134,11 @@ def format_signal(sig: Signal, now: datetime, local_tz: str) -> str:
         f"🟢 <b>GİRİŞ SİNYALİ — {esc(sig.ticker)}</b>",
         f"Strateji: {esc(sig.name)}",
         "",
-        f"Fiyat: <b>{sig.price:.2f} $</b>",
+        f"Giriş: <b>{sig.price:.2f} $</b>",
         f"Stop: {sig.stop:.2f} $ (−{sig.risk_pct:.1f}%)",
-        f"Hedef: {sig.target:.2f} $ (+{sig.reward_pct:.1f}%)",
+        f"TP1: {sig.target1:.2f} $ (+{sig.tp1_pct:.1f}%)",
+        f"TP2: {sig.target:.2f} $ (+{sig.reward_pct:.1f}%)",
+        "<i>Plan: TP1'de yarısını sat, stop'u giriş fiyatına çek. Kalanı TP2'de sat.</i>",
         "",
         "<b>Neden:</b>",
         *[f"• {esc(r)}" for r in sig.reasons],
@@ -148,9 +150,21 @@ def format_signal(sig: Signal, now: datetime, local_tz: str) -> str:
     return "\n".join(lines)
 
 
+def format_tp1(rec: dict, price: float, now: datetime, local_tz: str) -> str:
+    chg = (price - rec["price"]) / rec["price"] * 100
+    return "\n".join([
+        f"🎯 <b>TP1 GELDİ — {esc(rec['ticker'])}</b>",
+        f"{rec['price']:.2f} $ → {price:.2f} $ ({chg:+.1f}%)",
+        f"Plana göre: yarısını sat, stop'u giriş fiyatına (<b>{rec['price']:.2f} $</b>) çek.",
+        f"Kalan yarı için TP2: {rec['target']:.2f} $",
+        f"🕒 {fmt_time(now, local_tz)}",
+    ])
+
+
 OUTCOME_LABELS = {
-    "hedef": ("🎯", "HEDEFE ULAŞTI"),
+    "tp2": ("🎯🎯", "TP2 GELDİ — İŞLEM TAMAM"),
     "stop": ("🔴", "STOP OLDU"),
+    "be": ("⚪", "STOP GİRİŞTE — KALAN YARI BAŞA BAŞ KAPANDI"),
     "gun_sonu": ("⏹", "GÜN SONU KAPANDI"),
     "sure_doldu": ("⏹", "TAKİP SÜRESİ DOLDU"),
 }
@@ -160,23 +174,36 @@ def format_exit(rec: dict, outcome: str, exit_price: float, r_mult: float,
                 now: datetime, local_tz: str) -> str:
     icon, label = OUTCOME_LABELS.get(outcome, ("⏹", outcome.upper()))
     chg = (exit_price - rec["price"]) / rec["price"] * 100
-    return "\n".join([
+    lines = [
         f"{icon} <b>{label} — {esc(rec['ticker'])}</b>",
         f"Strateji: {esc(rec.get('name', rec['strategy']))}",
-        f"Sinyal fiyatı: {rec['price']:.2f} $ → {exit_price:.2f} $ ({chg:+.1f}%, {r_mult:+.2f}R)",
-        f"🕒 {fmt_time(now, local_tz)}",
-    ])
+        f"Giriş {rec['price']:.2f} $ → çıkış {exit_price:.2f} $ ({chg:+.1f}%)",
+    ]
+    if rec.get("tp1_hit"):
+        lines.append(f"TP1'de yarısı {rec['tp1_price']:.2f} $'dan satılmıştı.")
+    lines += [f"İşlemin toplam sonucu: <b>{r_mult:+.2f}R</b>", f"🕒 {fmt_time(now, local_tz)}"]
+    return "\n".join(lines)
 
 
-def format_open(n_tickers: int, now: datetime, local_tz: str) -> str:
-    return (f"🔔 <b>Piyasa açıldı.</b> {n_tickers} hisse 5 dakikada bir taranıyor.\n"
+def format_open(n_tickers: int, now: datetime, local_tz: str, minutes: int = 10) -> str:
+    return (f"🔔 <b>Piyasa açıldı.</b> {n_tickers} hisse {minutes} dakikada bir taranıyor.\n"
             f"🕒 {fmt_time(now, local_tz)}")
 
 
+MARKET_LINES = {
+    True: "Piyasa: ✅ Nasdaq yükseliş trendinde (200 günlük ortalamanın üstünde)",
+    False: "Piyasa: ⛔ Nasdaq 200 günlük ortalamanın altında. Yeni sinyal verilmiyor.",
+    None: "Piyasa: ❔ endeks verisi alınamadı, filtreli sinyaller bekletiliyor",
+}
+
+
 def format_daily_summary(day, n_scanned: int, n_requested: int, signals: list[Signal],
-                         n_open: int, stats: dict, next_open: datetime, local_tz: str) -> str:
+                         n_open: int, stats: dict, next_open: datetime, local_tz: str,
+                         market_ok: bool | None | str = "kapali") -> str:
     lines = [f"📊 <b>Günlük tarama — {day:%d.%m.%Y}</b>",
              f"{n_scanned}/{n_requested} hisse tarandı, {len(signals)} yeni sinyal."]
+    if market_ok != "kapali":
+        lines.append(MARKET_LINES.get(market_ok, MARKET_LINES[None]))
     for s in signals:
         lines.append(f"• {esc(s.ticker)}: {esc(s.name)} @ {s.price:.2f} $")
     lines.append(f"Takipte açık sinyal: {n_open}")

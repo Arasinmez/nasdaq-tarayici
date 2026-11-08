@@ -11,9 +11,13 @@ Nasdaq hisselerini tarar, bir giriş kurulumu oluşunca **Telegram'dan haber ver
 | Trendde geri çekilme | Günlük | Yükselen trendde (fiyat > 200G, 50G > 200G) RSI'ın 40'ın altından yukarı dönmesi |
 | Açılış aralığı kırılımı | 5 dakika | İlk 15 dakikanın tepesinin yüksek hacimle ve VWAP üstünde kırılması (11:30 NY'ye kadar) |
 
-Her sinyalde **fiyat, stop, hedef ve nedenleri** yazar. Sonra o sinyali takip eder:
-stop ya da hedef gelince ikinci bir mesaj atar ve sonucu `veri/sonuclar.csv` dosyasına kaydeder.
-Böylece botun gerçekte işe yarayıp yaramadığını zamanla görürsün.
+Her sinyalde **giriş, stop, TP1, TP2 ve nedenleri** yazar. Plan her zaman aynı:
+**TP1'de yarısını sat, stop'u giriş fiyatına çek, kalanı TP2'de sat.** Bot sinyali takip eder;
+TP1, TP2 ya da stop gelince ayrı mesaj atar ve sonucu `veri/sonuclar.csv` dosyasına kaydeder.
+
+**Filtreler** (config.yaml → `filtreler`):
+- **Piyasa filtresi:** Nasdaq-100 fonu (QQQ) 200 günlük ortalamasının altındaysa yeni sinyal verilmez.
+- **Göreceli güç:** Günlük sinyaller sadece son 3 ayda endeksten güçlü giden hisselerde verilir.
 
 Örnek mesaj:
 
@@ -21,9 +25,11 @@ Böylece botun gerçekte işe yarayıp yaramadığını zamanla görürsün.
 🟢 GİRİŞ SİNYALİ — NVDA
 Strateji: Açılış aralığı kırılımı (5 dk)
 
-Fiyat: 101.60 $
+Giriş: 101.60 $
 Stop: 100.50 $ (−1.1%)
-Hedef: 103.80 $ (+2.2%)
+TP1: 102.70 $ (+1.1%)
+TP2: 103.80 $ (+2.2%)
+Plan: TP1'de yarısını sat, stop'u giriş fiyatına çek. Kalanı TP2'de sat.
 
 Neden:
 • İlk 15 dakikanın aralığı 100.00–101.00 $; üst sınır kapanışla kırıldı
@@ -40,13 +46,13 @@ Bot 7/24 açık kalır ama Amerikan borsası 7/24 açık değil. Normal seans Ne
 09:30–16:00. Türkiye saatiyle **Kasım–Mart arası 17:30–00:00**, Mart–Kasım arası 16:30–23:00
 (ABD yaz saati yüzünden). Bot bunu kendisi hesaplar, resmî tatilleri de bilir.
 
-- **Seans açıkken:** 5 dakikada bir tüm listeyi tarar.
+- **Seans açıkken:** 10 dakikada bir tüm listeyi tarar.
 - **Kapanıştan 15 dk sonra (TR ~00:15):** günlük tarama yapar, yeni sinyalleri ve bir özet gönderir.
 - **Gece ve hafta sonu:** bekler. Açılışta "Piyasa açıldı" mesajı atar, böylece botun çalıştığını bilirsin.
 
 ## Bilgisayarsız çalıştırma: GitHub Actions (ücretsiz)
 
-Bot GitHub'ın sunucularında, hafta içi seans boyunca 5 dakikada bir kendiliğinden çalışır.
+Bot GitHub'ın sunucularında, hafta içi seans boyunca 10 dakikada bir kendiliğinden çalışır.
 Bilgisayarın açık olması gerekmez. Her şey telefondan ayarlanabilir.
 
 1. **Telegram botunu oluştur:** Telegram'da **@BotFather** → `/newbot` → isim ver → sana
@@ -64,12 +70,11 @@ Bilgisayarın açık olması gerekmez. Her şey telefondan ayarlanabilir.
    `veri/` klasörüne kaydedilir.
 
 **Bilmen gerekenler:**
-- **Herkese açık (public) depo** ücretsiz ve sınırsız; 5 dakikada bir tarar. Depon herkese açık
-  olursa izleme listen ve sinyal geçmişin görünür. Token'ın görünmez, çünkü "secret" olarak saklanır.
-- **Gizli (private) depo** ücretsiz planda ayda 2.000 dakikayla sınırlı. Bu yüzden
-  `.github/workflows/tarayici.yml` içindeki `*/5`'i `*/10` yap (10 dakikada bir).
+- **Herkese açık (public) depo** ücretsiz ve sınırsız. İzleme listen ve sinyal geçmişin görünür,
+  token'ın görünmez ("secret" olarak saklanır).
+- **Gizli (private) depo** ücretsiz planda ayda 2.000 dakikayla sınırlı; 10 dakikalık tarama buna sığar.
 - GitHub zamanlanmış işleri yoğun saatlerde birkaç dakika geç başlatabilir. Gün içi kırılım
-  15 dakikadan eskiyse bot geç kalmış sayar ve mesaj atmaz (`taze_dakika` ayarı). Günlük
+  20 dakikadan eskiyse bot geç kalmış sayar ve mesaj atmaz (`taze_dakika` ayarı). Günlük
   sinyaller bundan etkilenmez.
 - Yahoo bazen bulut sunucularından gelen istekleri sınırlayabilir. Sık sık "veri alınamadı"
   görürsen API anahtarlı bir veri kaynağına geçmek gerekir.
@@ -153,9 +158,10 @@ tarayici/
   notifier.py          Telegram ve mesaj biçimleri
   scanner.py           7/24 döngü, sinyal takibi (stop / hedef / süre)
   storage.py           tekrar mesaj koruması, CSV kayıtları
+  bracket.py           TP1/TP2 planı (canlı takip ve test aynı kodu kullanır)
   backtest.py          geçmiş test motoru
 .github/workflows/     GitHub Actions zamanlaması (bulutta çalıştırma)
-tests/                 48 otomatik test:  python -m pytest
+tests/                 57 otomatik test:  python -m pytest
 veri/                  (çalışınca oluşur) bot.log, sinyaller.csv, sonuclar.csv, durum.json
 ```
 

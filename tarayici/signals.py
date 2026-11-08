@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 
+import numpy as np
 import pandas as pd
 
 from . import indicators as ind
@@ -34,8 +35,9 @@ class Signal:
     bar_time: pd.Timestamp
     price: float
     stop: float
-    target: float
+    target: float              # TP2
     reasons: tuple[str, ...]
+    target1: float = float("nan")  # TP1
 
     @property
     def name(self) -> str:
@@ -52,6 +54,95 @@ class Signal:
     @property
     def reward_pct(self) -> float:
         return (self.target - self.price) / self.price * 100
+
+    @property
+    def tp1_pct(self) -> float:
+        return (self.target1 - self.price) / self.price * 100
+
+
+def tp1_from(price: float, stop: float, risk_cfg: dict) -> float:
+    return price + float(risk_cfg.get("hedef1_r", 1.0)) * (price - stop)
+
+
+# ---------------------------------------------------------------- filters
+
+def _bar_date(ts):
+    ts = pd.Timestamp(ts)
+    return (ts.tz_convert(ET) if ts.tzinfo else ts).date()
+
+
+def _dates(index) -> pd.DatetimeIndex:
+    return pd.DatetimeIndex([pd.Timestamp(_bar_date(t)) for t in index])
+
+
+def _market_close(mkt: pd.DataFrame) -> pd.Series:
+    m = mkt["Close"].copy()
+    m.index = _dates(m.index)
+    return m[~m.index.duplicated(keep="last")].sort_index()
+
+
+def filters_active(cfg: dict) -> bool:
+    f = cfg.get("filtreler", {})
+    return any(f.get(k, {}).get("aktif", False) for k in ("piyasa", "goreceli_guc"))
+
+
+def filter_mask(df: pd.DataFrame, mkt: pd.DataFrame | None, cfg: dict) -> pd.Series:
+    """True on days when the market filters allow a long entry.
+
+    piyasa: Nasdaq index ETF (QQQ) closes above its 200-day average.
+    goreceli_guc: the stock's 3-month return beats the index's 3-month return.
+    If a filter is on but index data is missing, nothing passes (fail closed).
+    """
+    f = cfg.get("filtreler", {})
+    mask = pd.Series(True, index=df.index)
+    if not filters_active(cfg):
+        return mask
+    if mkt is None or mkt.empty:
+        return pd.Series(False, index=df.index)
+    m = _market_close(mkt)
+    dates = _dates(df.index)
+    p = f.get("piyasa", {})
+    if p.get("aktif", False):
+        n = int(p.get("sma", 200))
+        above = (m > m.rolling(n, min_periods=n).mean()).reindex(dates, method="ffill")
+        mask &= pd.Series(above.fillna(False).to_numpy(bool), index=df.index)
+    g = f.get("goreceli_guc", {})
+    if g.get("aktif", False):
+        n = int(g.get("gun", 63))
+        stock_ret = df["Close"].pct_change(n).to_numpy()
+        mkt_ret = m.pct_change(n).reindex(dates, method="ffill").to_numpy()
+        with np.errstate(invalid="ignore"):
+            mask &= pd.Series(stock_ret > mkt_ret, index=df.index)
+    return mask
+
+
+def market_ok_now(mkt: pd.DataFrame | None, cfg: dict) -> bool | None:
+    """Is the index above its average on the latest bar? None if unknown."""
+    p = cfg.get("filtreler", {}).get("piyasa", {})
+    if mkt is None or mkt.empty:
+        return None
+    m = _market_close(mkt)
+    n = int(p.get("sma", 200))
+    if len(m) < n:
+        return None
+    return bool(m.iloc[-1] > m.iloc[-n:].mean())
+
+
+def filter_reasons(df: pd.DataFrame, mkt: pd.DataFrame | None, cfg: dict) -> tuple[str, ...]:
+    f = cfg.get("filtreler", {})
+    out = []
+    if mkt is None or mkt.empty:
+        return ()
+    if f.get("piyasa", {}).get("aktif", False):
+        out.append("Nasdaq (QQQ) 200 günlük ortalamasının üstünde: genel trend yukarı")
+    g = f.get("goreceli_guc", {})
+    if g.get("aktif", False):
+        n = int(g.get("gun", 63))
+        m = _market_close(mkt)
+        sr = df["Close"].iloc[-1] / df["Close"].iloc[-1 - n] - 1
+        mr = m.iloc[-1] / m.iloc[-1 - n] - 1 if len(m) > n else float("nan")
+        out.append(f"Son {n} işlem gününde endeksten güçlü (%{sr * 100:+.1f}, endeks %{mr * 100:+.1f})")
+    return tuple(out)
 
 
 # ---------------------------------------------------------------- daily
@@ -117,10 +208,15 @@ DAILY_STRATEGIES = {
 }
 
 
-def daily_signals(ticker: str, df: pd.DataFrame, cfg: dict) -> list[Signal]:
-    """Signals on the LAST bar of df. df must contain completed daily bars only."""
+def daily_signals(ticker: str, df: pd.DataFrame, cfg: dict,
+                  mkt: pd.DataFrame | None = None) -> list[Signal]:
+    """Signals on the LAST bar of df. df must contain completed daily bars only.
+    mkt: daily bars of the index ETF (QQQ), used by the market filters."""
     if df is None or len(df) < MIN_DAILY_BARS:
         return []
+    if not bool(filter_mask(df, mkt, cfg).iloc[-1]):
+        return []
+    extra = filter_reasons(df, mkt, cfg)
     out = []
     for key, (frame_fn, reasons_fn) in DAILY_STRATEGIES.items():
         p = cfg["stratejiler"].get(key, {})
@@ -131,10 +227,12 @@ def daily_signals(ticker: str, df: pd.DataFrame, cfg: dict) -> list[Signal]:
         if not bool(last["signal"]):
             continue
         price = float(df["Close"].iloc[-1])
-        if not (last["stop"] < price < last["target"]):
+        stop = float(last["stop"])
+        if not (stop < price < last["target"]):
             continue
-        out.append(Signal(ticker, key, "daily", df.index[-1], price,
-                          float(last["stop"]), float(last["target"]), reasons_fn(last)))
+        out.append(Signal(ticker, key, "daily", df.index[-1], price, stop,
+                          float(last["target"]), reasons_fn(last) + extra,
+                          tp1_from(price, stop, cfg["risk"])))
     return out
 
 
@@ -168,7 +266,8 @@ def _parse_hhmm(s: str) -> time:
     return time(int(h), int(m))
 
 
-def orb_signal(ticker: str, bars: pd.DataFrame, now: datetime, cfg: dict) -> Signal | None:
+def orb_signal(ticker: str, bars: pd.DataFrame, now: datetime, cfg: dict,
+               market_ok: bool | None = True) -> Signal | None:
     """Opening range breakout on 5-minute bars.
 
     Opening range = first N minutes after 09:30 ET. Signal when a bar closes
@@ -180,6 +279,8 @@ def orb_signal(ticker: str, bars: pd.DataFrame, now: datetime, cfg: dict) -> Sig
     p = cfg["stratejiler"].get("acilis_araligi_kirilimi", {})
     if not p.get("aktif", True):
         return None
+    if cfg.get("filtreler", {}).get("piyasa", {}).get("aktif", False) and market_ok is False:
+        return None  # index below its 200-day average: no new longs
     bar_min = int(cfg["zamanlama"].get("bar_dakika", 5))
     b = completed_session_bars(bars, now, bar_min)
     if b is None or b.empty:
@@ -223,4 +324,4 @@ def orb_signal(ticker: str, bars: pd.DataFrame, now: datetime, cfg: dict) -> Sig
         f"Fiyat VWAP'ın ({vwap:.2f} $) üstünde",
     )
     return Signal(ticker, "acilis_araligi_kirilimi", "intraday", after.index[-1],
-                  last_close, stop, target, reasons)
+                  last_close, stop, target, reasons, tp1_from(last_close, stop, cfg["risk"]))

@@ -1,4 +1,4 @@
-"""Günlük stratejileri geçmiş veride test eder.
+"""Stratejileri geçmiş veride, filtreli ve filtresiz olarak test eder.
 
 Kullanım:
   python geriye_test.py                       config.yaml'daki hisseler, son 5 yıl
@@ -8,6 +8,7 @@ Kullanım:
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from pathlib import Path
 
@@ -17,15 +18,25 @@ sys.path.insert(0, str(HERE))
 from tarayici.backtest import baseline_frame, simulate, summarize, trades_frame  # noqa: E402
 from tarayici.config import load_config  # noqa: E402
 from tarayici.data import YFinanceSource  # noqa: E402
-from tarayici.signals import DAILY_STRATEGIES, STRATEGY_NAMES  # noqa: E402
+from tarayici.signals import DAILY_STRATEGIES, STRATEGY_NAMES, filter_mask  # noqa: E402
+
+HEADER = (f"{'':<32} {'İşlem':>6} {'Kazanan':>8} {'TP1':>6} {'Ort. R':>8} {'± hata':>7} "
+          f"{'Toplam R':>9} {'PF':>5} {'Gün':>5}")
 
 
 def fmt(name: str, s: dict) -> str:
     if not s.get("n"):
-        return f"{name:<34} işlem yok"
+        return f"{name:<32} işlem yok"
     pf = "∞" if s["profit_factor"] == float("inf") else f"{s['profit_factor']:.2f}"
-    return (f"{name:<34} {s['n']:>6} {s['win_rate']:>7.1f}% {s['avg_r']:>+8.3f} "
-            f"{s['total_r']:>+9.1f} {pf:>6} {s['max_losing_streak']:>9} {s['avg_days']:>6.1f}")
+    return (f"{name:<32} {s['n']:>6} {s['win_rate']:>7.1f}% {s['tp1_rate']:>5.0f}% "
+            f"{s['avg_r']:>+8.3f} {s['margin']:>7.3f} {s['total_r']:>+9.1f} {pf:>5} {s['avg_days']:>5.1f}")
+
+
+def variant_cfg(cfg: dict, market: bool, rs: bool) -> dict:
+    c = copy.deepcopy(cfg)
+    c["filtreler"]["piyasa"]["aktif"] = market
+    c["filtreler"]["goreceli_guc"]["aktif"] = rs
+    return c
 
 
 def main() -> int:
@@ -44,38 +55,51 @@ def main() -> int:
 
     cfg = load_config(args.config)
     tickers = [t.upper() for t in args.hisseler] if args.hisseler else cfg["izleme_listesi"]
-    print(f"{len(tickers)} hisse için {args.yil} yıllık günlük veri indiriliyor...")
-    data = YFinanceSource(daily_period=f"{args.yil}y").daily(tickers)
+    index = str(cfg["filtreler"].get("endeks", "QQQ")).upper()
+    print(f"{len(tickers)} hisse + {index} için {args.yil} yıllık günlük veri indiriliyor...")
+    data = YFinanceSource(daily_period=f"{args.yil}y").daily(tickers + [index])
+    mkt = data.pop(index, None)
     if not data:
         print("Veri alınamadı. İnternet bağlantısını kontrol edip tekrar dene.")
         return 1
+    if mkt is None:
+        print(f"UYARI: {index} verisi alınamadı, filtreli sonuçlar boş çıkacak.")
 
-    results, all_trades = {}, []
-    for key, (frame_fn, _) in DAILY_STRATEGIES.items():
-        p = cfg["stratejiler"].get(key, {})
-        if not p.get("aktif", True):
-            continue
-        trades = []
+    variants = [
+        ("FİLTRESİZ", variant_cfg(cfg, False, False)),
+        ("PİYASA FİLTRESİ (QQQ > 200G)", variant_cfg(cfg, True, False)),
+        ("PİYASA + GÖRECELİ GÜÇ", variant_cfg(cfg, True, True)),
+    ]
+    all_trades = []
+    for title, vc in variants:
+        print()
+        print(f"=== {title} ===")
+        print(HEADER)
+        masks = {t: filter_mask(df, mkt, vc) for t, df in data.items()}
+        for key, (frame_fn, _) in DAILY_STRATEGIES.items():
+            p = vc["stratejiler"].get(key, {})
+            if not p.get("aktif", True):
+                continue
+            trades = []
+            for t, df in data.items():
+                trades += simulate(df, frame_fn(df, p, vc["risk"]), t, key, args.max_gun,
+                                   args.kayma_bps, vc["risk"], masks[t])
+            print(fmt(STRATEGY_NAMES[key], summarize(trades)))
+            if title == variants[-1][0]:
+                all_trades += trades
+        base = []
         for t, df in data.items():
-            trades += simulate(df, frame_fn(df, p, cfg["risk"]), t, key, args.max_gun, args.kayma_bps)
-        results[STRATEGY_NAMES[key]] = summarize(trades)
-        all_trades += trades
-    base = []
-    for t, df in data.items():
-        base += simulate(df, baseline_frame(df, cfg["risk"]), t, "rastgele", args.max_gun, args.kayma_bps)
-    results["Kıyas: her gün rastgele giriş"] = summarize(base)
+            base += simulate(df, baseline_frame(df, vc["risk"]), t, "rastgele", args.max_gun,
+                             args.kayma_bps, vc["risk"], masks[t])
+        print(fmt("Kıyas: rastgele giriş", summarize(base)))
 
     print()
-    print(f"{'Strateji':<34} {'İşlem':>6} {'İsabet':>8} {'Ort. R':>8} {'Toplam R':>9} {'PF':>6} "
-          f"{'Ard.kayıp':>9} {'Gün':>6}")
-    print("-" * 95)
-    for name, s in results.items():
-        print(fmt(name, s))
-    print()
-    print("Nasıl okunur: Ort. R = işlem başına ortalama kazanç, risk birimi cinsinden.")
-    print("+0.20R, her 100 TL riske ortalama 20 TL kazanç demek. Strateji, 'rastgele giriş'")
-    print("satırını belirgin şekilde geçmiyorsa sinyal bir avantaj sağlamıyor demektir.")
-    print("100'den az işlem varsa sonuç büyük ihtimalle şans; daha çok hisse/yıl ile dene.")
+    print("Nasıl okunur:")
+    print("• Ort. R: işlem başına ortalama sonuç. +0.20R = her 100 TL riske ortalama +20 TL.")
+    print("• ± hata: şans payı. İki satırın farkı bu paydan küçükse fark şans olabilir.")
+    print("• Plan: TP1'de yarısı satılır ve stop girişe çekilir, kalan yarı TP2'de satılır.")
+    print("• Bir strateji, aynı filtredeki 'rastgele giriş' satırını belirgin geçmiyorsa")
+    print("  sinyal ekstra bir şey katmıyor demektir. Filtrenin katkısını satırlar arası kıyasla gör.")
     print("UYARI: Liste bugünün başarılı şirketlerinden oluştuğu için sonuçlar olduğundan iyi")
     print("görünür (hayatta kalma yanılgısı). Komisyon, vergi ve kur farkı dahil değildir.")
 
@@ -84,7 +108,6 @@ def main() -> int:
     if all_trades:
         path = out / "geriye_test_islemler.csv"
         trades_frame(all_trades).to_csv(path, index=False, encoding="utf-8-sig")
-        print(f"\nTüm işlemler: {path}")
     return 0
 
 

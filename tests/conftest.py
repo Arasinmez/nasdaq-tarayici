@@ -67,7 +67,14 @@ def orb_bars():
 def cfg():
     c = _merge(DEFAULTS, {})
     c["izleme_listesi"] = ["TEST"]
+    c["filtreler"]["piyasa"]["aktif"] = False       # filters have their own tests
+    c["filtreler"]["goreceli_guc"]["aktif"] = False
+    c["zamanlama"]["gun_ici_aralik_dakika"] = 5      # tests step through 5-minute bars
     return c
+
+
+def qqq(start, end, n=256, end_date="2026-11-09"):
+    return daily_from_closes(np.linspace(start, end, n), end=end_date)
 
 
 class FakeSource:

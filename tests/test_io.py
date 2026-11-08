@@ -93,9 +93,10 @@ def test_split_message():
 
 
 def test_format_signal_escapes_html():
-    s = Signal("A&B", "kirilim", "daily", pd.Timestamp("2026-11-09"), 100.0, 95.0, 110.0, ("x < y",))
+    s = Signal("A&B", "kirilim", "daily", pd.Timestamp("2026-11-09"), 100.0, 95.0, 110.0, ("x < y",), 105.0)
     msg = format_signal(s, et(2026, 11, 9, 16, 15), "Europe/Istanbul")
     assert "A&amp;B" in msg and "x &lt; y" in msg
+    assert "TP1: 105.00 $ (+5.0%)" in msg and "TP2: 110.00 $ (+10.0%)" in msg
     assert "16:15 New York · 00:15 Türkiye" in msg
 
 
@@ -108,18 +109,31 @@ def test_simulate_target_stop_and_timeout():
     frame.iloc[209, 0] = True          # signal -> enter at bar 210 open
     df.iloc[212, df.columns.get_loc("High")] = 111.0   # target hit on bar 212
     trades = simulate(df, frame, "T", "x", max_hold=20, slippage_bps=0)
-    assert len(trades) == 1 and trades[0].outcome == "hedef"
-    assert abs(trades[0].r - 2.0) < 1e-9
+    assert len(trades) == 1 and trades[0].outcome == "tp2" and trades[0].tp1_hit
+    assert abs(trades[0].r - 1.5) < 1e-9   # TP1 = 105 (1R), TP2 = 110 (2R), half each
 
     df.iloc[211, df.columns.get_loc("Low")] = 94.0     # stop earlier than target
     t2 = simulate(df, frame, "T", "x", slippage_bps=0)[0]
     assert t2.outcome == "stop" and abs(t2.r + 1.0) < 1e-9
 
 
+def test_bracket_walk():
+    from tarayici.bracket import total_r, walk_bracket
+    ev, tp1, closed = walk_bracket(100, 95, 105, 110, [(100, 106, 99), (106, 107, 100.5), (101, 101, 99)])
+    assert ev == [("tp1", 105), ("be", 100)] and closed
+    assert total_r(100, 5, 105, 100) == 0.5
+    ev, _, closed = walk_bracket(100, 95, 105, 110, [(96, 97, 90)])
+    assert ev == [("stop", 95)] and closed
+    ev, _, closed = walk_bracket(100, 95, 105, 110, [(94, 96, 93)])   # gap below stop
+    assert ev == [("stop", 94)]
+    ev, tp1, closed = walk_bracket(100, 95, 105, 110, [(101, 104, 99)])
+    assert ev == [] and not tp1 and not closed
+
+
 def test_backtest_runs_on_real_strategy_frame(cfg):
     df = breakout_daily()
-    trades = simulate(df, breakout_frame(df, {}, cfg["risk"]), "T", "kirilim")
-    base = simulate(df, baseline_frame(df, cfg["risk"]), "T", "rastgele")
+    trades = simulate(df, breakout_frame(df, {}, cfg["risk"]), "T", "kirilim", risk_cfg=cfg["risk"])
+    base = simulate(df, baseline_frame(df, cfg["risk"]), "T", "rastgele", risk_cfg=cfg["risk"])
     assert summarize(base)["n"] > 0
     assert isinstance(summarize(trades), dict)
 

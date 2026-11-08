@@ -61,7 +61,7 @@ telegram:
   chat_id: ""
 
 zamanlama:
-  gun_ici_aralik_dakika: 5        # piyasa açıkken kaç dakikada bir taransın
+  gun_ici_aralik_dakika: 10       # piyasa açıkken kaç dakikada bir taransın (bilgisayarda çalışırken)
   bar_dakika: 5                   # gün içi mum uzunluğu (dakika)
   mum_kapanis_gecikmesi_sn: 20    # mum kapandıktan kaç saniye sonra veri çekilsin
   gunluk_tarama_gecikme_dk: 15    # kapanıştan kaç dakika sonra günlük tarama yapılsın
@@ -80,11 +80,21 @@ stratejiler:
     aralik_dakika: 15
     hacim_kati: 1.5
     son_saat_et: "11:30"          # New York saatiyle bundan sonra sinyal verme
-    taze_dakika: 15               # kırılım bundan daha eskiyse geç kalmış say, mesaj atma
+    taze_dakika: 20               # kırılım bundan daha eskiyse geç kalmış say, mesaj atma
+
+filtreler:
+  endeks: QQQ                     # Nasdaq-100 fonu; filtreler buna bakar
+  piyasa:                         # endeks 200 günlük ortalamanın altındaysa yeni sinyal yok
+    aktif: true
+    sma: 200
+  goreceli_guc:                   # sadece son 3 ayda endeksten güçlü giden hisseler
+    aktif: true
+    gun: 63
 
 risk:
   atr_carpani: 2.0                # günlük stop = fiyat − 2 × ATR(14)
-  hedef_r: 2.0                    # hedef = riskin 2 katı (2R)
+  hedef1_r: 1.0                   # TP1 = riskin 1 katı. TP1'de yarısını sat, stop'u girişe çek
+  hedef_r: 2.0                    # TP2 = riskin 2 katı. Kalan yarı burada kapanır
 
 takip:
   tekrar_bekleme_saat: 20         # aynı hisse + strateji için en erken tekrar uyarı

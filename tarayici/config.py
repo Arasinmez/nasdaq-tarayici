@@ -13,7 +13,7 @@ DEFAULTS: dict = {
     "veri_klasoru": "veri",
     "telegram": {"aktif": True, "bot_token": "", "chat_id": ""},
     "zamanlama": {
-        "gun_ici_aralik_dakika": 5,
+        "gun_ici_aralik_dakika": 10,
         "bar_dakika": 5,
         "mum_kapanis_gecikmesi_sn": 20,
         "gunluk_tarama_gecikme_dk": 15,
@@ -24,10 +24,15 @@ DEFAULTS: dict = {
         "trend_geri_cekilme": {"aktif": True, "rsi_esik": 40},
         "acilis_araligi_kirilimi": {
             "aktif": True, "aralik_dakika": 15, "hacim_kati": 1.5, "son_saat_et": "11:30",
-            "taze_dakika": 15,
+            "taze_dakika": 20,
         },
     },
-    "risk": {"atr_carpani": 2.0, "hedef_r": 2.0},
+    "filtreler": {
+        "endeks": "QQQ",
+        "piyasa": {"aktif": True, "sma": 200},
+        "goreceli_guc": {"aktif": True, "gun": 63},
+    },
+    "risk": {"atr_carpani": 2.0, "hedef1_r": 1.0, "hedef_r": 2.0},
     "takip": {"tekrar_bekleme_saat": 20, "gunluk_sinyal_max_gun": 20},
 }
 

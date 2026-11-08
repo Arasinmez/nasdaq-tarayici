@@ -40,8 +40,9 @@ def test_breakout_signal(cfg):
     names = [s.strategy for s in sigs]
     assert "kirilim" in names
     s = next(x for x in sigs if x.strategy == "kirilim")
-    assert s.stop < s.price < s.target
+    assert s.stop < s.price < s.target1 < s.target
     assert abs((s.target - s.price) - 2 * (s.price - s.stop)) < 1e-9
+    assert abs((s.target1 - s.price) - (s.price - s.stop)) < 1e-9
 
 
 def test_breakout_needs_volume(cfg):
@@ -80,6 +81,14 @@ def test_orb_fires_on_fresh_breakout(cfg):
     assert s.price == 101.6
     assert s.stop == 100.5  # middle of the 100.0–101.0 opening range
     assert abs(s.target - (101.6 + 2 * 1.1)) < 1e-9
+    assert abs(s.target1 - (101.6 + 1.1)) < 1e-9
+
+
+def test_orb_blocked_by_market_filter(cfg):
+    cfg["filtreler"]["piyasa"]["aktif"] = True
+    bars = intraday_day(bars=orb_bars())
+    assert orb_signal("TEST", bars, et(2026, 11, 10, 10, 0, 20), cfg, market_ok=False) is None
+    assert orb_signal("TEST", bars, et(2026, 11, 10, 10, 0, 20), cfg, market_ok=True) is not None
 
 
 def test_orb_ignores_forming_bar(cfg):
@@ -88,8 +97,8 @@ def test_orb_ignores_forming_bar(cfg):
 
 
 def test_orb_stale_breakout_not_reported(cfg):
-    bars = orb_bars() + [(101.6, 101.9, 101.4, 101.7, 40_000)] * 3
-    assert orb_signal("TEST", intraday_day(bars=bars), et(2026, 11, 10, 10, 15, 20), cfg) is None
+    bars = orb_bars() + [(101.6, 101.9, 101.4, 101.7, 40_000)] * 5
+    assert orb_signal("TEST", intraday_day(bars=bars), et(2026, 11, 10, 10, 25, 20), cfg) is None
 
 
 def test_orb_needs_volume(cfg):

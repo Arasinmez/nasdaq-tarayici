@@ -4,8 +4,8 @@ on:
   schedule:
     # Saatler UTC. Bu aralık ABD seansını hem yaz hem kış saatinde kapsar
     # (hafta içi, Türkiye saatiyle 16:00–00:55). Kapanış sonrası günlük tarama da bu aralıkta.
-    # Repo GİZLİ (private) ise ücretsiz kotayı aşmamak için */5 yerine */10 yaz.
-    - cron: "*/5 13-21 * * 1-5"
+    # 10 dakikada bir. Daha sık istersen */10'u */5 yap (public repoda ücretsiz).
+    - cron: "*/10 13-21 * * 1-5"
   workflow_dispatch:
     inputs:
       islem:

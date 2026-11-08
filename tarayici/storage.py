@@ -56,7 +56,9 @@ class State:
         self.data["open"][rid] = {
             "id": rid, "ticker": sig.ticker, "strategy": sig.strategy, "name": sig.name,
             "timeframe": sig.timeframe, "price": sig.price, "stop": sig.stop,
-            "target": sig.target, "alerted_at": now.isoformat(),
+            "target1": sig.target1, "target": sig.target, "risk": sig.price - sig.stop,
+            "tp1_hit": False, "tp1_price": None, "checked_until": None,
+            "alerted_at": now.isoformat(),
         }
         return rid
 
@@ -72,9 +74,9 @@ class State:
 
 
 class Journal:
-    SIGNAL_COLS = ["zaman", "hisse", "strateji", "zaman_dilimi", "fiyat", "stop", "hedef", "nedenler"]
+    SIGNAL_COLS = ["zaman", "hisse", "strateji", "zaman_dilimi", "fiyat", "stop", "tp1", "tp2", "nedenler"]
     RESULT_COLS = ["sinyal_zamani", "kapanis_zamani", "hisse", "strateji", "sonuc",
-                   "sinyal_fiyati", "stop", "hedef", "cikis_fiyati", "r"]
+                   "sinyal_fiyati", "stop", "tp1", "tp2", "tp1_alindi", "cikis_fiyati", "r"]
 
     def __init__(self, folder: str | Path):
         self.folder = Path(folder)
@@ -93,12 +95,14 @@ class Journal:
     def log_signal(self, sig: Signal, now: datetime) -> None:
         self._append(self.signals_path, self.SIGNAL_COLS, [
             now.isoformat(timespec="seconds"), sig.ticker, sig.strategy, sig.timeframe,
-            f"{sig.price:.4f}", f"{sig.stop:.4f}", f"{sig.target:.4f}", " | ".join(sig.reasons)])
+            f"{sig.price:.4f}", f"{sig.stop:.4f}", f"{sig.target1:.4f}", f"{sig.target:.4f}",
+            " | ".join(sig.reasons)])
 
     def log_result(self, rec: dict, outcome: str, exit_price: float, r_mult: float, now: datetime) -> None:
         self._append(self.results_path, self.RESULT_COLS, [
             rec["alerted_at"], now.isoformat(timespec="seconds"), rec["ticker"], rec["strategy"],
-            outcome, f"{rec['price']:.4f}", f"{rec['stop']:.4f}", f"{rec['target']:.4f}",
+            outcome, f"{rec['price']:.4f}", f"{rec['stop']:.4f}", f"{rec.get('target1', 0):.4f}",
+            f"{rec['target']:.4f}", "evet" if rec.get("tp1_hit") else "hayir",
             f"{exit_price:.4f}", f"{r_mult:.3f}"])
 
     def stats(self) -> dict:

@@ -7,11 +7,13 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
+from .bracket import total_r, walk_bracket
 from .data import DataSource, completed_daily
 from .market_hours import (ET, close_time, is_trading_day, next_regular_open,
                            previous_trading_day, session, to_et)
-from .notifier import format_daily_summary, format_exit, format_open, format_signal
-from .signals import Signal, daily_signals, orb_signal
+from .notifier import (format_daily_summary, format_exit, format_open, format_signal,
+                       format_tp1)
+from .signals import Signal, daily_signals, filters_active, market_ok_now, orb_signal
 from .storage import Journal, State
 
 log = logging.getLogger("tarayici.scanner")
@@ -37,6 +39,7 @@ class Scanner:
         self.journal = journal
         self.tz = cfg["yerel_saat_dilimi"]
         self.tickers: list[str] = cfg["izleme_listesi"]
+        self.index_ticker = str(cfg.get("filtreler", {}).get("endeks", "QQQ")).upper()
         z = cfg["zamanlama"]
         self.interval = timedelta(minutes=int(z["gun_ici_aralik_dakika"]))
         self.bar_width = timedelta(minutes=int(z["bar_dakika"]))
@@ -62,43 +65,43 @@ class Scanner:
         return True
 
     def _close(self, rec: dict, outcome: str, exit_price: float, now: datetime) -> None:
-        risk = rec["price"] - rec["stop"]
-        r_mult = (exit_price - rec["price"]) / risk if risk > 0 else 0.0
+        r_mult = total_r(rec["price"], rec.get("risk", rec["price"] - rec["stop"]),
+                         rec.get("tp1_price"), exit_price)
         self.notifier.send(format_exit(rec, outcome, exit_price, r_mult, now, self.tz))
         self.journal.log_result(rec, outcome, exit_price, r_mult, now)
         self.state.close_open(rec["id"])
         log.info("KAPANDI %s %s %s %.2fR", rec["ticker"], rec["strategy"], outcome, r_mult)
 
-    def _first_hit(self, rec: dict, bars: pd.DataFrame) -> tuple[str, float] | None:
-        """Walk bars in time order; if a bar touches both levels assume the stop (conservative)."""
-        for _, row in bars.iterrows():
-            if row["Low"] <= rec["stop"]:
-                return "stop", min(rec["stop"], float(row["Open"]))
-            if row["High"] >= rec["target"]:
-                return "hedef", max(rec["target"], float(row["Open"]))
-        return None
+    def _apply(self, rec: dict, bars: pd.DataFrame, now: datetime) -> bool:
+        """Run the TP1/TP2 plan over new bars. Returns True if the trade closed."""
+        events, _, closed = walk_bracket(
+            rec["price"], rec["stop"], rec.get("target1", rec["target"]), rec["target"],
+            zip(bars["Open"], bars["High"], bars["Low"]), bool(rec.get("tp1_hit")))
+        for kind, px in events:
+            if kind == "tp1":
+                rec["tp1_hit"], rec["tp1_price"] = True, float(px)
+                self.notifier.send(format_tp1(rec, float(px), now, self.tz))
+                log.info("TP1 %s %s @ %.2f", rec["ticker"], rec["strategy"], px)
+            else:
+                self._close(rec, kind, float(px), now)
+        return closed
 
-    # ------------------------------------------------------------- scans
+    def _track_intraday(self, ticker: str, done: pd.DataFrame, now: datetime) -> None:
+        for rec in self.state.open_for(ticker):
+            start = datetime.fromisoformat(rec.get("checked_until") or rec["alerted_at"])
+            new = done[done.index + self.bar_width > start]
+            if new.empty:
+                continue
+            if not self._apply(rec, new, now):
+                rec["checked_until"] = (new.index[-1] + self.bar_width).isoformat()
 
-    def scan_intraday(self, now: datetime) -> list[Signal]:
-        data = self.source.intraday(self.tickers)
-        if not data:
-            log.warning("Gün içi veri alınamadı")
-            return []
-        sent = []
-        for ticker, bars in data.items():
+    def _track_open_intraday(self, now: datetime) -> None:
+        tickers = sorted({r["ticker"] for r in self.state.data["open"].values()})
+        if not tickers:
+            return
+        for ticker, bars in self.source.intraday(tickers).items():
             b = _et_index(bars)
-            done = b[b.index + self.bar_width <= now]
-            for rec in self.state.open_for(ticker):
-                alerted = datetime.fromisoformat(rec["alerted_at"])
-                hit = self._first_hit(rec, done[done.index + self.bar_width > alerted])
-                if hit:
-                    self._close(rec, hit[0], hit[1], now)
-            sig = orb_signal(ticker, b, now, self.cfg)
-            if sig and self._alert(sig, now):
-                sent.append(sig)
-        self.state.save()
-        return sent
+            self._track_intraday(ticker, b[b.index + self.bar_width <= now], now)
 
     def _daily_exits(self, ticker: str, df: pd.DataFrame, now: datetime) -> None:
         max_days = int(self.cfg["takip"]["gunluk_sinyal_max_gun"])
@@ -107,35 +110,66 @@ class Scanner:
             a_date = datetime.fromisoformat(rec["alerted_at"]).astimezone(ET).date()
             if rec["timeframe"] == "intraday":
                 idx = [i for i, d in enumerate(dates) if d >= a_date]
-                if idx:  # the alert day's session is over: close at its closing price
+                if idx:  # the alert day's session is over: close the rest at that close
                     self._close(rec, "gun_sonu", float(df["Close"].iloc[idx[0]]), now)
                 continue
-            later = df.iloc[[i for i, d in enumerate(dates) if d > a_date]]
-            hit = self._first_hit(rec, later)
-            if hit:
-                self._close(rec, hit[0], hit[1], now)
-            elif len(later) >= max_days:
+            c = rec.get("checked_until")
+            from_date = max(a_date, datetime.fromisoformat(c).astimezone(ET).date()) if c else a_date
+            later = df.iloc[[i for i, d in enumerate(dates) if d > from_date]]
+            if not later.empty:
+                if self._apply(rec, later, now):
+                    continue
+                last = _bar_date(later.index[-1])
+                rec["checked_until"] = datetime.combine(last, close_time(last), tzinfo=ET).isoformat()
+            if sum(d > a_date for d in dates) >= max_days:
                 self._close(rec, "sure_doldu", float(df["Close"].iloc[-1]), now)
+
+    # ------------------------------------------------------------- scans
+
+    def scan_intraday(self, now: datetime) -> list[Signal]:
+        data = self.source.intraday(self.tickers)
+        if not data:
+            log.warning("Gün içi veri alınamadı")
+            return []
+        market_ok = self.state.flag("piyasa_ok")
+        sent = []
+        for ticker, bars in data.items():
+            b = _et_index(bars)
+            self._track_intraday(ticker, b[b.index + self.bar_width <= now], now)
+            sig = orb_signal(ticker, b, now, self.cfg, market_ok)
+            if sig and self._alert(sig, now):
+                sent.append(sig)
+        self.state.save()
+        return sent
 
     def scan_daily(self, now: datetime, day: date) -> list[Signal] | None:
         """Scan completed daily bars. Returns None if no data came back (retry later)."""
-        data = self.source.daily(self.tickers)
-        if not data:
+        use_filters = filters_active(self.cfg)
+        wanted = list(self.tickers)
+        if use_filters and self.index_ticker not in wanted:
+            wanted.append(self.index_ticker)
+        data = self.source.daily(wanted)
+        if not set(data) & set(self.tickers):
             log.warning("Günlük veri alınamadı; 10 dakika sonra tekrar denenecek")
             return None
+        mkt = completed_daily(data[self.index_ticker], now) if self.index_ticker in data else None
+        market_ok = market_ok_now(mkt, self.cfg) if use_filters else None
+        self.state.set_flag("piyasa_ok", market_ok)
+        self._track_open_intraday(now)
         sent, scanned = [], 0
-        for ticker, raw in data.items():
-            df = completed_daily(raw, now)
+        for ticker in self.tickers:
+            df = completed_daily(data.get(ticker), now)
             if df is None or df.empty:
                 continue
             scanned += 1
             self._daily_exits(ticker, df, now)
-            for sig in daily_signals(ticker, df, self.cfg):
+            for sig in daily_signals(ticker, df, self.cfg, mkt):
                 if self._alert(sig, now):
                     sent.append(sig)
         self.notifier.send(format_daily_summary(
             day, scanned, len(self.tickers), sent, self.state.n_open,
-            self.journal.stats(), next_regular_open(now), self.tz))
+            self.journal.stats(), next_regular_open(now), self.tz,
+            market_ok if use_filters else "kapali"))
         self.state.save()
         return sent
 
@@ -155,14 +189,7 @@ class Scanner:
     def tick(self, now: datetime) -> float:
         """Do whatever is due at `now`; return seconds to sleep until the next check."""
         d = to_et(now).date()
-        if session(now) == "regular":
-            if self.cfg["zamanlama"]["acilis_bildirimi"] and self.state.flag("open_notified") != d.isoformat():
-                self.notifier.send(format_open(len(self.tickers), now, self.tz))
-                self.state.set_flag("open_notified", d.isoformat())
-                self.state.save()
-            if self.last_intraday is None or now - self.last_intraday >= self.interval - timedelta(seconds=30):
-                self.last_intraday = now
-                self.scan_intraday(now)
+        # daily scan first, so the market filter is fresh before any intraday scan
         target = self.daily_target(now)
         if self.state.flag("daily_done") != target.isoformat() and (
                 self.daily_retry_after is None or now >= self.daily_retry_after):
@@ -172,6 +199,15 @@ class Scanner:
                 self.daily_retry_after = None
                 self.state.set_flag("daily_done", target.isoformat())
                 self.state.save()
+        if session(now) == "regular":
+            if self.cfg["zamanlama"]["acilis_bildirimi"] and self.state.flag("open_notified") != d.isoformat():
+                self.notifier.send(format_open(len(self.tickers), now, self.tz,
+                                              int(self.interval.total_seconds() // 60)))
+                self.state.set_flag("open_notified", d.isoformat())
+                self.state.save()
+            if self.last_intraday is None or now - self.last_intraday >= self.interval - timedelta(seconds=30):
+                self.last_intraday = now
+                self.scan_intraday(now)
         return self.sleep_seconds(now)
 
     def sleep_seconds(self, now: datetime) -> float:
