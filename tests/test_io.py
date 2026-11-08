@@ -174,3 +174,12 @@ def test_yfinance_missing_ticker_is_retried(monkeypatch):
     out = YFinanceSource(pause_sec=0).daily(["AAA", "BBB"])
     assert set(out) == {"AAA", "BBB"}
     assert calls[1] == (["BBB"], False)
+
+
+def test_trade_dollars():
+    from tarayici.backtest import Trade, trade_dollars
+    # $1000 at 100, stop 95 (5% risk): +1.5R -> +7.5% -> +$75 ; -1R -> -$50
+    win = Trade("T", "x", "d", "d", 100.0, 95.0, 105.0, 110.0, True, 110.0, 1.5, "tp2", 3)
+    loss = Trade("T", "x", "d", "d", 100.0, 95.0, 105.0, 110.0, False, 95.0, -1.0, "stop", 2)
+    assert abs(trade_dollars(win, 1000) - 75) < 1e-9
+    assert abs(trade_dollars(loss, 1000) + 50) < 1e-9

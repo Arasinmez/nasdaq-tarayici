@@ -118,5 +118,33 @@ def summarize(trades: list[Trade]) -> dict:
     }
 
 
+def trade_dollars(t: Trade, amount: float) -> float:
+    """Profit in dollars if `amount` was invested at entry (half sold at TP1 if reached)."""
+    return amount * t.r * (t.entry - t.stop) / t.entry
+
+
+def dollar_summary(trades: list[Trade], amount: float) -> dict:
+    if not trades:
+        return {"n": 0}
+    pnl = np.array([trade_dollars(t, amount) for t in trades])
+    return {"n": len(pnl), "total": float(pnl.sum()), "avg": float(pnl.mean()),
+            "win_rate": 100 * float((pnl > 0).mean()),
+            "best": float(pnl.max()), "worst": float(pnl.min())}
+
+
+def buy_and_hold(data: dict[str, pd.DataFrame], amount: float) -> dict:
+    """Invest `amount` once in every stock at the start of the test window and hold."""
+    rets = []
+    for df in data.values():
+        if len(df) > MIN_DAILY_BARS:
+            c = df["Close"].to_numpy(float)
+            rets.append(c[-1] / c[MIN_DAILY_BARS - 1] - 1)
+    if not rets:
+        return {"n": 0}
+    rets = np.array(rets)
+    return {"n": len(rets), "invested": amount * len(rets), "total": float(amount * rets.sum()),
+            "avg": float(amount * rets.mean())}
+
+
 def trades_frame(trades: list[Trade]) -> pd.DataFrame:
     return pd.DataFrame([asdict(t) for t in trades])

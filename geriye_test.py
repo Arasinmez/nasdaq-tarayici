@@ -15,7 +15,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from tarayici.backtest import baseline_frame, simulate, summarize, trades_frame  # noqa: E402
+from tarayici.backtest import (baseline_frame, buy_and_hold, dollar_summary, simulate,  # noqa: E402
+                               summarize, trade_dollars, trades_frame)
 from tarayici.config import load_config  # noqa: E402
 from tarayici.data import YFinanceSource  # noqa: E402
 from tarayici.signals import DAILY_STRATEGIES, STRATEGY_NAMES, filter_mask  # noqa: E402
@@ -51,6 +52,7 @@ def main() -> int:
     ap.add_argument("--kayma-bps", type=float, default=5.0, help="giriş ve çıkışta kayma (baz puan)")
     ap.add_argument("--max-gun", type=int, default=20)
     ap.add_argument("--hisseler", nargs="*")
+    ap.add_argument("--islem-tutari", type=float, default=1000.0, help="her işleme yatırılan dolar")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -92,6 +94,49 @@ def main() -> int:
             base += simulate(df, baseline_frame(df, vc["risk"]), t, "rastgele", args.max_gun,
                              args.kayma_bps, vc["risk"], masks[t])
         print(fmt("Kıyas: rastgele giriş", summarize(base)))
+
+    # ---- dollars, with the current config.yaml settings
+    amt = args.islem_tutari
+    print()
+    print(f"=== DOLAR OLARAK: her işleme {amt:,.0f} $ (şu anki ayarlarla) ===")
+    masks = {t: filter_mask(df, mkt, cfg) for t, df in data.items()}
+    live_trades = []
+    rows = []
+    for key, (frame_fn, _) in DAILY_STRATEGIES.items():
+        p = cfg["stratejiler"].get(key, {})
+        if not p.get("aktif", True):
+            continue
+        tr = []
+        for t, df in data.items():
+            tr += simulate(df, frame_fn(df, p, cfg["risk"]), t, key, args.max_gun,
+                           args.kayma_bps, cfg["risk"], masks[t])
+        live_trades += tr
+        rows.append((STRATEGY_NAMES[key], dollar_summary(tr, amt)))
+    rnd = []
+    for t, df in data.items():
+        rnd += simulate(df, baseline_frame(df, cfg["risk"]), t, "rastgele", args.max_gun,
+                        args.kayma_bps, cfg["risk"], masks[t])
+    rows.append(("Kıyas: rastgele giriş", dollar_summary(rnd, amt)))
+    print(f"{'':<32} {'İşlem':>6} {'Toplam kâr':>12} {'İşlem başına':>13} {'Kazanan':>8} "
+          f"{'En iyi':>9} {'En kötü':>9}")
+    for name, s in rows:
+        if not s.get("n"):
+            print(f"{name:<32} işlem yok")
+            continue
+        print(f"{name:<32} {s['n']:>6} {s['total']:>+11,.0f}$ {s['avg']:>+12,.2f}$ "
+              f"{s['win_rate']:>7.1f}% {s['best']:>+8,.0f}$ {s['worst']:>+8,.0f}$")
+    bh = buy_and_hold(data, amt)
+    if bh.get("n"):
+        print(f"\nKarşılaştırma: aynı dönemin başında her hisseye bir kere {amt:,.0f} $ koyup beklesen")
+        print(f"  ({bh['n']} hisse, toplam {bh['invested']:,.0f} $): toplam kâr {bh['total']:+,.0f} $, "
+              f"hisse başına ortalama {bh['avg']:+,.0f} $")
+
+    print(f"\nSon işlemlerden örnekler ({amt:,.0f} $ ile):")
+    for t in sorted(live_trades, key=lambda x: x.signal_date)[-8:]:
+        pnl = trade_dollars(t, amt)
+        how = {"tp2": "TP2", "stop": "stop", "be": "TP1 sonra girişte", "sure": "süre doldu"}[t.outcome]
+        print(f"  {t.signal_date} {t.ticker:<5} {STRATEGY_NAMES[t.strategy][:22]:<22} giriş {t.entry:>8.2f} $ "
+              f"→ çıkış {t.exit:>8.2f} $ ({how}) = {pnl:+7.2f} $")
 
     print()
     print("Nasıl okunur:")

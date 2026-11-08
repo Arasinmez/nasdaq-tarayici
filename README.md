@@ -161,7 +161,7 @@ tarayici/
   bracket.py           TP1/TP2 planı (canlı takip ve test aynı kodu kullanır)
   backtest.py          geçmiş test motoru
 .github/workflows/     GitHub Actions zamanlaması (bulutta çalıştırma)
-tests/                 58 otomatik test:  python -m pytest
+tests/                 59 otomatik test:  python -m pytest
 veri/                  (çalışınca oluşur) bot.log, sinyaller.csv, sonuclar.csv, durum.json
 ```
 
