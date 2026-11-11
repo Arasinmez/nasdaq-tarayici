@@ -1,8 +1,8 @@
 {
   "alerts": {},
   "flags": {
-    "piyasa_ok": false,
-    "daily_done": "2026-11-10",
+    "piyasa_ok": true,
+    "daily_done": "2026-11-11",
     "open_notified": "2026-11-11"
   },
   "open": {}
